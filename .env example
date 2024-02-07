@@ -1,0 +1,2 @@
+EMAIL_HOST_USER = 'your Email Address'
+EMAIL_HOST_PASSWORD = 'your email passowrd'

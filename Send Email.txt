@@ -1,0 +1,140 @@
+pip install django-dotenv
+
+--------------------add following in manage.py---------------------
+import dotenv
+if __name__ == "__main__":
+    dotenv.load_dotenv()
+
+-------------------add this in .env file-------------------------
+EMAIL_HOST_USER = 'youremail@gmail.com'
+EMAIL_HOST_PASSWORD = 'yourpassword' 
+using app password
+Go to your Google Account.
+Select Security.
+Under "Signing in to Google," select 2-Step Verification.
+At the bottom of the page, select App passwords.
+Enter a name that helps you remember where you’ll use the app password.
+Select Generate.
+To enter the app password, follow the instructions on your screen. The app password is the 16-character code that generates on your device.
+Select Done.
+
+
+------------------add this in setting file------------------------
+import os
+#Email Configuration
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_USE_TLS = True
+EMAIL_PORT = 587
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD")
+
+--------------------account.urls------------------------
+path("send-reset-password-email", SendPasswordResetEmailView.as_view(), name="reset-password"),
+    path("reset/<uid>/<token>", UserPasswordResetView.as_view(), name="reset-password"),
+
+-------------------account.views-----------------------------------
+
+class SendPasswordResetEmailView(APIView):
+  renderer_classes = [UserRenderers]
+
+  def post(self, request):
+    serializer = SendPasswordResetEmailSerializer(data = request.data)
+    if not serializer.is_valid():
+      return Response({'status': 403, 'message': serializer.errors} )
+    return Response({'status': 200, 'MSG':"Password Reset email sent, Please check your email"})
+
+
+class UserPasswordResetView(APIView):
+  renderer_classes = [UserRenderers]
+
+  def post(self, request, uid, token):
+    serializer = UserPasswordResetSerializer(data = request.data, context={"uid": uid, "token": token})
+    if not serializer.is_valid():
+      return Response({'status': 403, 'message': serializer.errors} )
+    return Response({'status': 200, 'MSG':"Password Reset Successfully"})
+
+------------------------account.serilizers------------------------------
+from rest_framework import serializers
+from .models import CustomUser
+from django.utils.encoding import smart_str, force_bytes, DjangoUnicodeDecodeError
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from .utils import *
+
+class SendPasswordResetEmailSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(max_length=255)
+
+    class Meta:
+        model = CustomUser
+        fields = ['email']
+    
+    def validate(self, data):
+        email = data['email']
+        if CustomUser.objects.filter(email = email).exists():
+            user = CustomUser.objects.get(email=email)
+            uid = urlsafe_base64_encode(force_bytes(user.id))
+            print( "Encoded ID",uid)
+            token = PasswordResetTokenGenerator().make_token(user)
+            print("Token", token)
+            link = "http://localhost:8000/api/user/reset/"+uid+"/"+token
+            print(link)
+            # Send Email
+            body = "Click following link to reset " + link
+            data_email = {
+                "subject":"Email Reset",
+                "body": body,
+                "to_email": user.email
+            }
+            Util.send_mail(data_email)
+            return data
+
+            
+        else:
+            raise serializers.ValidationError({'Error': "Email Does not exist"})
+
+
+class UserPasswordResetSerializer(serializers.ModelSerializer):
+    password = serializers.CharField( max_length=255, style={'input_type': 'password'}, write_only=True)
+    password2 = serializers.CharField( max_length=255, style={'input_type': 'password'}, write_only=True)
+    class Meta:
+        model = CustomUser
+        fields = ['password', 'password2']
+    
+    def validate(self, data):
+        try:
+            password = data['password']
+            password2 = data['password2']
+            uid = self.context.get('uid')
+            token = self.context.get('token')
+
+            if password != password2:
+                raise serializers.ValidationError({'Error': "Password mismatch"})
+        
+            id = smart_str(urlsafe_base64_decode(uid))
+            user = CustomUser.objects.get(id=id)
+            if not PasswordResetTokenGenerator().check_token(user, token):
+                raise serializers.ValidationError({'Error': "Invalid Token or Expired"})
+            user.set_password(password)
+            user.save()
+        
+            return data
+        except DjangoUnicodeDecodeError as identifier:
+            PasswordResetTokenGenerator().check_token(user, token)
+            raise serializers.ValidationError({'Error': "Invalid Token or expired"}) 
+
+create util.py file
+-----------------------utils.py-----------------
+from django.core.mail import EmailMessage
+import os
+
+class Util:
+    @staticmethod
+    def send_mail(data):
+        email = EmailMessage(
+            subject=data['subject'],
+            body=data['body'],
+            from_email=os.environ.get('EMAIL_HOST_USER'),  # Replace with your actual email address
+            to=[data['to_email']],  # Use square brackets for a list of email addresses
+        )
+        email.send()
